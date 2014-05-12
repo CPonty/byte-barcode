@@ -69,7 +69,7 @@ class App(ttk.Frame):
         
         # initial values
         self.pdf = None
-        self.imWidth = 8
+        self.barWidth = 8
         self.imgArr = [None]*256
         self.byteStrings = [""]
         self.strings_generate()
@@ -104,7 +104,7 @@ class App(ttk.Frame):
         frame1=ttk.Frame(mainFrame,height=100,width=400)
 
         self.imageLbl = ttk.Label(mainFrame)
-        self.imageLbl.image = Image.new('L',(self.imWidth*App.W,App.H))
+        self.imageLbl.image = Image.new('L',(self.barWidth*App.W,App.H))
         self.imageLbl.image = ImageTk.PhotoImage(self.imageLbl.image)
         self.imageLbl.configure(image=self.imageLbl.image)
 
@@ -230,15 +230,15 @@ class App(ttk.Frame):
         for i in xrange(256):
             self.progressLbl.configure(text="Image %d of 256"%i)
             #self.progressLbl.update() #slows things down too much
-            self.imgArr[i] = Image.new('L', (self.imWidth,1))
+            self.imgArr[i] = Image.new('L', (self.barWidth,1))
             pixelVector = bin(i)[2:].zfill(8)
             pixelVector = [c=='0' and 255 or 0 for c in pixelVector]
-            if self.imWidth==10: pixelVector=[0,255]+pixelVector
-            if not (self.imWidth in (8,10)):
-                raise ValueError("App.imWidth not in (8,10)")
+            if self.barWidth==10: pixelVector=[0,255]+pixelVector
+            if not (self.barWidth in (8,10)):
+                raise ValueError("App.barWidth not in (8,10)")
             #print pixelVector
             pixels = self.imgArr[i].load()
-            for j in xrange(self.imWidth): pixels[j,0] = pixelVector[j]
+            for j in xrange(self.barWidth): pixels[j,0] = pixelVector[j]
         self.progressLbl.configure(text="")
         self.progressLbl.update()
         self.imgReady = True
@@ -248,13 +248,13 @@ class App(ttk.Frame):
         if App.dbg_ui: print "app: img_display()"
         if self.imageLbl==None: return
         imBig = self.imgArr[self.activeByte]
-        imBig = imBig.resize((self.imWidth*App.W,App.H), Image.NEAREST)
+        imBig = imBig.resize((self.barWidth*App.W,App.H), Image.NEAREST)
         self.imageLbl.image = ImageTk.PhotoImage(imBig)
         self.imageLbl.configure(image=self.imageLbl.image)
 
     def img_change(self,*args):
         if App.dbg_ui: print "app: img_change()"
-        self.imWidth = 8 + 2*self.imgLeadBitOn.get()
+        self.barWidth = 8 + 2*self.imgLeadBitOn.get()
         self.img_generate() # generate images
         self.img_display()  # display images
         self.pdf_generate() # regenerate pdf (depends on this)
@@ -291,22 +291,29 @@ class App(ttk.Frame):
         self.pdf = canvas.Canvas(App.pdfname, pagesize=landscape(A4))
         self.pdf.setPageCompression(0)
         bdW = 0.5*mm #border
-        imX = App.A4Hmargin*cm
-        imY = App.A4Wmargin*cm
-        imH = (App.A4H - 2*App.A4Hmargin)*cm
-        imW = (App.A4W - 2*App.A4Wmargin - self.pdfLabelOn.get())*cm
+        barX = App.A4Hmargin*cm
+        barY = App.A4Wmargin*cm
+        barH = (App.A4H - 2*App.A4Hmargin)*cm
+        barW = (App.A4W - 2*App.A4Wmargin - 2*self.pdfLabelOn.get())*cm
+        bitH = float(barH)/self.barWidth
         for i in xrange(256):
             im = reportlab_utils.ImageReader(self.imgArr[i])
-            self.pdf.drawImage(im,imX,imY,imH,imW)
+            pix2color = lambda px: px>0 and white or black
+            pixels = self.imgArr[i].load()
+            for j in xrange(self.barWidth):
+                color = pix2color(pixels[j,0])
+                self.pdf.setFillColor(color)
+                self.pdf.rect(barY+j*bitH-1, barX-1, bitH+1, barW+1, 
+                    fill=1, stroke=0)
             if self.pdfBorderOn.get():
                 self.pdf.setStrokeColor(red)
                 self.pdf.setLineWidth(bdW)
-                self.pdf.rect(imX-bdW, imY-bdW, imH+2*bdW, imW+2*bdW,
+                self.pdf.rect(barY-bdW, barX-bdW, barH+2*bdW, barW+2*bdW,
                     fill=0, stroke=1)
             if self.pdfLabelOn.get():
                 self.pdf.setFillColor(black)
-                self.pdf.setFont("Helvetica",12)
-                self.pdf.drawString(imX, (App.A4W-App.A4Wmargin)*cm, 
+                self.pdf.setFont("Courier",16)
+                self.pdf.drawString(barY, (App.A4W-App.A4Wmargin-1)*cm, 
                     self.byteStrings[i])
             self.pdf.showPage()
         self.progressLbl.configure(text="")
