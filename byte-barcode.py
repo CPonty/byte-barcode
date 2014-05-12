@@ -7,7 +7,8 @@ from time import sleep, strftime
 import os, sys, signal, errno, subprocess
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.units import cm
+from reportlab.lib.units import cm, mm
+from reportlab.lib.colors import yellow, red, black,white
 import reportlab.lib.utils as reportlab_utils
 #force reportlab to use the same Image library imported above
 reportlab_utils.Image = Image 
@@ -36,6 +37,7 @@ class App(ttk.Frame):
     path = os.path.dirname(os.path.abspath(__file__))
     W,H = 30,60  # ui displays barcode images at this rescale factor
     A4W,A4H = A4[0]/cm, A4[1]/cm # size of A4 paper in cm
+    A4Hmargin,A4Wmargin = 1,1 # size of paper borders in cm
     dbg_ui = False
     dbg_key = False
     helptext = "\n"+(('='*13)+"\nByte-Barcode\n"+('='*13)+"\n\n"
@@ -283,23 +285,33 @@ class App(ttk.Frame):
 
     def pdf_generate(self):
         if App.dbg_ui: print "app: pdf_generate()"
-        # generate pdf
         self.progressLbl.configure(text="Generating PDF")
         self.progressLbl.update()
-        #
+        # generate pdf
         self.pdf = canvas.Canvas(App.pdfname, pagesize=landscape(A4))
         self.pdf.setPageCompression(0)
+        bdW = 0.5*mm #border
+        imX = App.A4Hmargin*cm
+        imY = App.A4Wmargin*cm
+        imH = (App.A4H - 2*App.A4Hmargin)*cm
+        imW = (App.A4W - 2*App.A4Wmargin - self.pdfLabelOn.get())*cm
         for i in xrange(256):
             im = reportlab_utils.ImageReader(self.imgArr[i])
-            self.pdf.drawImage(im,0,0,App.A4H*cm,App.A4W*cm)
+            self.pdf.drawImage(im,imX,imY,imH,imW)
+            if self.pdfBorderOn.get():
+                self.pdf.setStrokeColor(red)
+                self.pdf.setLineWidth(bdW)
+                self.pdf.rect(imX-bdW, imY-bdW, imH+2*bdW, imW+2*bdW,
+                    fill=0, stroke=1)
+            if self.pdfLabelOn.get():
+                self.pdf.setFillColor(black)
+                self.pdf.setFont("Helvetica",12)
+                self.pdf.drawString(imX, (App.A4W-App.A4Wmargin)*cm, 
+                    self.byteStrings[i])
             self.pdf.showPage()
-        #
-        #sleep(0.5)
-        #
         self.progressLbl.configure(text="")
         self.progressLbl.update()
         self.pdfReady = True
-#TODO
 
     def pdf_change(self,*args):
         if App.dbg_ui: print "app: pdf_change()"
