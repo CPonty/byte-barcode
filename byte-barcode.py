@@ -4,20 +4,46 @@ import Tkinter as tk
 import ttk
 from PIL import Image, ImageTk
 from time import sleep, strftime
-import signal
+import os, sys, signal, errno, subprocess
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import cm
+import reportlab.lib.utils as reportlab_utils
+#force reportlab to use the same Image library imported above
+reportlab_utils.Image = Image 
 
 yesno = lambda t: t and "y" or "n"
 
+def ensure_dir_exists(path):
+    try:
+        os.makedirs(path)
+    except OSError as exception:
+        if exception.errno != errno.EEXIST:
+            raise IOError("Failed to create dir %s"%(os.path.abspath(path)))
+
+def execute_path(path):
+    if sys.platform.startswith('darwin'):
+        subprocess.call(('open', path))
+    elif os.name == 'nt':
+        os.startfile(path)
+    elif os.name == 'posix':
+        subprocess.call(('xdg-open', path))
+
 class App(ttk.Frame):
-    W,H = 30,60  #ui displays barcode images at this rescale factor
+    # 'Constants'
+    imgextension="png"
+    pdfname="barcodes.pdf"
+    path = os.path.dirname(os.path.abspath(__file__))
+    W,H = 30,60  # ui displays barcode images at this rescale factor
+    A4W,A4H = A4[0]/cm, A4[1]/cm # size of A4 paper in cm
     dbg_ui = False
     dbg_key = False
     helptext = "\n"+(('='*13)+"\nByte-Barcode\n"+('='*13)+"\n\n"
     "Generate barcode images and a printable .pdf from byte values\n\n"
     "  <arrows>\tScroll through barcode images\n"
     "  1-9\t\tCheck/uncheck options\n"
-    "  e\t\tExport images/[0-255].bmp, barcodes.pdf\n"
-    "  o\t\tOpen barcodes.pdf\n"
+    "  e\t\tExport images/*.png, barcodes.pdf\n"
+    "  o\t\tOpen export folder\n"
     "  q\t\tExit\n")
 
     def __init__(self, root):
@@ -40,6 +66,7 @@ class App(ttk.Frame):
         self.byteComboStr.trace('w', self.byte_change)
         
         # initial values
+        self.pdf = None
         self.imWidth = 8
         self.imgArr = [None]*256
         self.byteStrings = [""]
@@ -48,9 +75,12 @@ class App(ttk.Frame):
         self.byteComboStr.set(self.byteStrings[self.activeByte])
         self.pdfReady = False
         self.imgReady = False
-
+        
         # ui
         self.ui()
+
+        # initialise the pdf, image
+        self.img_change()
 
         # keyboard/mouse bindings
         root.bind_all('<Key>', self.key_handler)
@@ -59,10 +89,9 @@ class App(ttk.Frame):
         self.byteCombo.bind('<<ListboxSelect>>', self.byte_change)
 
         # start
-        self.img_change()
-        self.export(openPdf=False)
+        self.export()
         print App.helptext
-        root.grab_set() # grab focus back from terminal
+#        root.grab_set() # grab focus back from terminal
         
     def ui(self):
         self.style = ttk.Style()
@@ -100,21 +129,28 @@ class App(ttk.Frame):
             variable=self.pdfBorderOn)
         self.labelCbx = ttk.Checkbutton(frame2, text="PDF labels", 
             variable=self.pdfLabelOn)
-        self.closeBtn = ttk.Button(self, text="Close", command=self.close)
-        self.exportBtn = ttk.Button(self, text="Export images, PDF", 
-            command=self.export)
+        self.closeBtn = ttk.Button(self, text="Exit", command=self.close)
+        self.openBtn = ttk.Button(self, text="Open Folder", 
+            command=self.path_open)
+        self.exportBtn = ttk.Button(self, text="Export", command=self.export)
         self.progressLbl = ttk.Label(self, text="")
         
         # pack
+        padBtn,padCbx,padLbl = 5,10,5
         self.prevBtn.pack(side=tk.LEFT)
         self.byteCombo.pack(side=tk.LEFT)
         self.nextBtn.pack(side=tk.LEFT)
-        self.bitCbx.pack(side=tk.LEFT, padx=5, pady=5)
-        self.borderCbx.pack(side=tk.LEFT, padx=5, pady=5)
-        self.labelCbx.pack(side=tk.LEFT, padx=5, pady=5)
-        self.closeBtn.pack(side=tk.RIGHT, padx=5, pady=5)
-        self.exportBtn.pack(side=tk.RIGHT, padx=5, pady=5)
-        self.progressLbl.pack(side=tk.LEFT, padx=5, pady=5)
+        self.bitCbx.pack(side=tk.LEFT, padx=padCbx, pady=padCbx)
+        self.borderCbx.pack(side=tk.LEFT, padx=padCbx, pady=padCbx)
+        self.labelCbx.pack(side=tk.LEFT, padx=padCbx, pady=padCbx)
+        self.closeBtn.pack(side=tk.RIGHT, padx=padBtn, pady=padBtn)
+        self.openBtn.pack(side=tk.RIGHT, padx=padBtn, pady=padBtn)
+        self.exportBtn.pack(side=tk.RIGHT, padx=padBtn, pady=padBtn)
+        self.progressLbl.pack(side=tk.LEFT, padx=5, pady=padLbl)
+
+        # set window minimum size
+        self.root.update()
+        self.root.minsize(self.root.winfo_width()+125, self.root.winfo_height())
 
     def key_handler(self, event):
         if App.dbg_key: print "key:", event.keysym, "...",
@@ -136,7 +172,7 @@ class App(ttk.Frame):
         elif event.char=="e":
             self.export()
         elif event.char=="o":
-            self.pdf_open()
+            self.path_open()
         else:
             if App.dbg_key: print ""
 
@@ -147,7 +183,6 @@ class App(ttk.Frame):
     def next_byte(self, *args):
         self.set_byte(self.activeByte+1)
         if App.dbg_ui: print "Next code (%d)"%(self.activeByte)
-        self.img_display()
 
     def prev_byte(self, *args):
         self.set_byte(self.activeByte-1)
@@ -202,7 +237,6 @@ class App(ttk.Frame):
             #print pixelVector
             pixels = self.imgArr[i].load()
             for j in xrange(self.imWidth): pixels[j,0] = pixelVector[j]
-            #self.imgArr[i].save('img/%d.png'%(i))
         self.progressLbl.configure(text="")
         self.progressLbl.update()
         self.imgReady = True
@@ -215,7 +249,6 @@ class App(ttk.Frame):
         imBig = imBig.resize((self.imWidth*App.W,App.H), Image.NEAREST)
         self.imageLbl.image = ImageTk.PhotoImage(imBig)
         self.imageLbl.configure(image=self.imageLbl.image)
-        #imBig.save('display.png')
 
     def img_change(self,*args):
         if App.dbg_ui: print "app: img_change()"
@@ -228,21 +261,41 @@ class App(ttk.Frame):
         if App.dbg_ui: print "app: img_out()"
         if self.imgReady==False: return False
         # ensure folder path exists
+        imgPath = os.path.join(App.path, "images")
+        ensure_dir_exists(imgPath)
         # write images & print progress
         for i in xrange(256):
-            self.progressLbl.configure(text="images/%d.bmp"%i)
+            imgFname="images/%d.%s"%(i, App.imgextension)
+            self.progressLbl.configure(text=imgFname)
             self.progressLbl.update()
+            try: 
+                self.imgArr[i].save(imgFname)
+            except Exception:
+                errmsg="[ERR] Writing %s failed"%(imgFname)
+                print errmsg
+                self.progressLbl.configure(text=errmsg)
+                self.progressLbl.update()
+                return False
         self.progressLbl.configure(text="")
         self.progressLbl.update()
-        print "Saved: /.../images/*.bmp"
-#TODO
+        print "Saved: %s/*.%s"%(str(imgPath), App.imgextension)
+        return True
 
     def pdf_generate(self):
         if App.dbg_ui: print "app: pdf_generate()"
         # generate pdf
         self.progressLbl.configure(text="Generating PDF")
         self.progressLbl.update()
-        sleep(0.5)
+        #
+        self.pdf = canvas.Canvas(App.pdfname, pagesize=landscape(A4))
+        self.pdf.setPageCompression(0)
+        for i in xrange(256):
+            im = reportlab_utils.ImageReader(self.imgArr[i])
+            self.pdf.drawImage(im,0,0,App.A4H*cm,App.A4W*cm)
+            self.pdf.showPage()
+        #
+        #sleep(0.5)
+        #
         self.progressLbl.configure(text="")
         self.progressLbl.update()
         self.pdfReady = True
@@ -255,32 +308,38 @@ class App(ttk.Frame):
     def pdf_out(self):
         if App.dbg_ui: print "app: pdf_out()"
         if self.pdfReady==False: return False
-        # ensure folder path exists
         # write pdf & print result
-        self.progressLbl.configure(text="barcodes.pdf")
+        pdfPath = os.path.join(App.path, App.pdfname)
+        self.progressLbl.configure(text=App.pdfname)
         self.progressLbl.update()
-        sleep(0.5)
+        pdfSize = 0
+        try:
+            self.pdf.save()
+            pdfSize = os.path.getsize(pdfPath)
+        except Exception:
+            errmsg="[ERR] Writing %s failed"%(App.pdfname)
+            print errmsg
+            self.progressLbl.configure(text=errmsg)
+            self.progressLbl.update()
+            return False
         self.progressLbl.configure(text="")
         self.progressLbl.update()
-        print "Saved: /.../___.pdf"
-#TODO
+        print "Saved: %s"%(str(pdfPath))
+        print "Size:  %.2fKB"%(pdfSize/1024.0)
+        return True
 
-    def pdf_open(self):
-        if App.dbg_ui: print "app: pdf_open()"
-        # dialog box; open PDF file (os-specific action)
-        if self.pdfReady==False: return False
-        print "Opening: /.../___.pdf"
-#TODO
+    def path_open(self):
+        if App.dbg_ui: print "app: path_open()"
+        # open exported folder path (os-specific action)
+        print "Opening: %s"%(App.path)
+        execute_path(App.path)
 
-    def export(self, openPdf=True):
+    def export(self):
         self.exportBtn.config(state='disabled') # disable button
         if App.dbg_ui: print "app: export()"
         self.exportBtn.update()
         self.config_print() # list configuration
-        # regenerating images,pdf not needed - done on tickbox change
-        self.img_out() # export images
-        self.pdf_out() # export pdf
-        if openPdf: self.pdf_open() # open PDF
+        self.img_out() and self.pdf_out() # export images, pdf
         self.exportBtn.config(state='normal') # enable button
         self.exportBtn.update()
         print ""
@@ -310,8 +369,8 @@ if __name__ == '__main__':
     main()  
 
 #======================================================================
-
 #TODO
+
 """
 pdf_change: add/remove image border in gui
 change combobox to listbox: http://www.tkdocs.com/tutorial/morewidgets.html
