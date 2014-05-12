@@ -299,7 +299,9 @@ class App(ttk.Frame):
         for i in xrange(256):
             im = reportlab_utils.ImageReader(self.imgArr[i])
             pix2color = lambda px: px>0 and white or black
+            bit = lambda px: px>0 and '0' or '1'
             pixels = self.imgArr[i].load()
+            bitstr = ''.join([bit(pixels[j,0]) for j in xrange(self.barWidth)])
             for j in xrange(self.barWidth):
                 color = pix2color(pixels[j,0])
                 self.pdf.setFillColor(color)
@@ -314,7 +316,7 @@ class App(ttk.Frame):
                 self.pdf.setFillColor(black)
                 self.pdf.setFont("Courier",16)
                 self.pdf.drawString(barY, (App.A4W-App.A4Wmargin-1)*cm, 
-                    self.byteStrings[i])
+                    self.byteStrings[i]+"  0b"+bitstr)
             self.pdf.showPage()
         self.progressLbl.configure(text="")
         self.progressLbl.update()
