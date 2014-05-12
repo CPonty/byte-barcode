@@ -229,7 +229,7 @@ class App(ttk.Frame):
         # repopulate images (in memory, not on disk)
         for i in xrange(256):
             self.progressLbl.configure(text="Image %d of 256"%i)
-            self.progressLbl.update()
+            #self.progressLbl.update() #slows things down too much
             self.imgArr[i] = Image.new('L', (self.imWidth,1))
             pixelVector = bin(i)[2:].zfill(8)
             pixelVector = [c=='0' and 255 or 0 for c in pixelVector]
